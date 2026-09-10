@@ -1,0 +1,15 @@
+# Personal PSoC Creator settings
+*.cywrk.*
+*.cyprj.*
+
+# Build output
+**/CortexM0/
+**/CortexM0p/
+**/CortexM3/
+**/Debug/
+**/Release/
+**/codegentemp/
+
+# Backups
+**/Backup/
+*.bak
