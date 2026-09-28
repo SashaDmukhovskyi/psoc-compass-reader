@@ -13,3 +13,13 @@
 # Backups
 **/Backup/
 *.bak
+
+# PSoC Creator generated files
+BUILD.log
+*.cycdx
+*.cyfit
+*.rpt
+*.svd
+*_timing.html
+Generated_Source/
+Export/
