@@ -11,11 +11,16 @@
  */
 
 #include "project.h"
+#include <stdio.h>
 
 
 /* QMC5883L I2C settings */
 #define QMC5883L_ADDRESS               (0x0Du)
 #define QMC5883L_CHIP_ID_REG           (0x0Du)
+
+/* QMC5883L data registers */
+#define QMC5883L_DATA_START_REG        (0x00u)
+#define QMC5883L_DATA_BYTE_COUNT       (6u)
 
 /* QMC5883L configuration registers */
 #define QMC5883L_CONTROL_1_REG         (0x09u)
@@ -33,9 +38,18 @@
 /* I2C settings */
 #define I2C_WRITE_MODE                 (0u)
 #define I2C_READ_MODE                  (1u)
+#define I2C_ACK                        (0u)
 #define I2C_NACK                       (1u)
 #define I2C_STATUS_OK                  (0u)
 #define I2C_TIMEOUT_MS                 (100u)
+
+
+typedef struct
+{
+    int16 x;
+    int16 y;
+    int16 z;
+} QMC5883L_Data;
 
 
 /* Set by the DRDY interrupt and processed in the main loop. */
@@ -44,9 +58,6 @@ volatile uint8 dataReady = 0u;
 
 /**
  * @brief Writes one byte to a QMC5883L register.
- *
- * @param[in] registerAddress Destination register address.
- * @param[in] value           Value to write.
  *
  * @retval 1u Write completed successfully.
  * @retval 0u I2C communication failed.
@@ -97,9 +108,6 @@ uint8 QMC5883L_WriteRegister(uint8 registerAddress, uint8 value)
 /**
  * @brief Reads one byte from a QMC5883L register.
  *
- * @param[in]  registerAddress Register address to read.
- * @param[out] value           Destination for the received byte.
- *
  * @retval 1u Read completed successfully.
  * @retval 0u I2C communication failed.
  */
@@ -107,10 +115,6 @@ uint8 QMC5883L_ReadRegister(uint8 registerAddress, uint8 *value)
 {
     uint32 status;
 
-    /*
-     * Write the register address first to set the sensor's
-     * internal register pointer.
-     */
     status = I2C_1_I2CMasterSendStart(
         QMC5883L_ADDRESS,
         I2C_WRITE_MODE,
@@ -133,7 +137,6 @@ uint8 QMC5883L_ReadRegister(uint8 registerAddress, uint8 *value)
         return 0u;
     }
 
-    /* Repeated START changes direction without releasing the bus. */
     status = I2C_1_I2CMasterSendRestart(
         QMC5883L_ADDRESS,
         I2C_READ_MODE,
@@ -146,7 +149,6 @@ uint8 QMC5883L_ReadRegister(uint8 registerAddress, uint8 *value)
         return 0u;
     }
 
-    /* NACK indicates that this is the final requested byte. */
     status = I2C_1_I2CMasterReadByte(
         I2C_NACK,
         value,
@@ -156,6 +158,103 @@ uint8 QMC5883L_ReadRegister(uint8 registerAddress, uint8 *value)
     (void)I2C_1_I2CMasterSendStop(I2C_TIMEOUT_MS);
 
     return (status == I2C_STATUS_OK) ? 1u : 0u;
+}
+
+
+/**
+ * @brief Reads raw X, Y and Z measurements from the QMC5883L.
+ *
+ * @retval 1u Measurement was read successfully.
+ * @retval 0u I2C communication failed.
+ */
+uint8 QMC5883L_ReadData(QMC5883L_Data *data)
+{
+    uint8 rawData[QMC5883L_DATA_BYTE_COUNT];
+    uint8 index;
+    uint8 response;
+    uint32 status;
+
+    status = I2C_1_I2CMasterSendStart(
+        QMC5883L_ADDRESS,
+        I2C_WRITE_MODE,
+        I2C_TIMEOUT_MS
+    );
+
+    if (status != I2C_STATUS_OK)
+    {
+        return 0u;
+    }
+
+    status = I2C_1_I2CMasterWriteByte(
+        QMC5883L_DATA_START_REG,
+        I2C_TIMEOUT_MS
+    );
+
+    if (status != I2C_STATUS_OK)
+    {
+        (void)I2C_1_I2CMasterSendStop(I2C_TIMEOUT_MS);
+        return 0u;
+    }
+
+    status = I2C_1_I2CMasterSendRestart(
+        QMC5883L_ADDRESS,
+        I2C_READ_MODE,
+        I2C_TIMEOUT_MS
+    );
+
+    if (status != I2C_STATUS_OK)
+    {
+        (void)I2C_1_I2CMasterSendStop(I2C_TIMEOUT_MS);
+        return 0u;
+    }
+
+    for (index = 0u; index < QMC5883L_DATA_BYTE_COUNT; index++)
+    {
+        if (index == (QMC5883L_DATA_BYTE_COUNT - 1u))
+        {
+            response = I2C_NACK;
+        }
+        else
+        {
+            response = I2C_ACK;
+        }
+
+        status = I2C_1_I2CMasterReadByte(
+            response,
+            &rawData[index],
+            I2C_TIMEOUT_MS
+        );
+
+        if (status != I2C_STATUS_OK)
+        {
+            (void)I2C_1_I2CMasterSendStop(I2C_TIMEOUT_MS);
+            return 0u;
+        }
+    }
+
+    status = I2C_1_I2CMasterSendStop(I2C_TIMEOUT_MS);
+
+    if (status != I2C_STATUS_OK)
+    {
+        return 0u;
+    }
+
+    data->x = (int16)(
+        ((uint16)rawData[1] << 8u) |
+        rawData[0]
+    );
+
+    data->y = (int16)(
+        ((uint16)rawData[3] << 8u) |
+        rawData[2]
+    );
+
+    data->z = (int16)(
+        ((uint16)rawData[5] << 8u) |
+        rawData[4]
+    );
+
+    return 1u;
 }
 
 
@@ -212,19 +311,18 @@ CY_ISR(DRDY_handler)
 
 
 /**
- * @brief Initializes the compass reader application.
- *
- * @return This function does not return.
+ * @brief Initializes and runs the compass reader.
  */
 int main(void)
 {
     uint8 chipId;
     uint32 i2cStatus;
+    QMC5883L_Data measurement;
+    char output[80];
 
     UART_1_Start();
     I2C_1_Start();
 
-    /* Clear an old pending event before enabling the interrupt. */
     (void)DRDY_ClearInterrupt();
     isr_DRDY_StartEx(DRDY_handler);
 
@@ -232,7 +330,6 @@ int main(void)
 
     UART_1_UartPutString("Compass reader started\r\n");
 
-    /* Check whether a device acknowledges address 0x0D. */
     i2cStatus = I2C_1_I2CMasterSendStart(
         QMC5883L_ADDRESS,
         I2C_WRITE_MODE,
@@ -241,16 +338,19 @@ int main(void)
 
     if (i2cStatus == I2C_STATUS_OK)
     {
-        UART_1_UartPutString("Device found at 0x0D\r\n");
+        UART_1_UartPutString(
+            "Device found at 0x0D\r\n"
+        );
     }
     else
     {
-        UART_1_UartPutString("No response at 0x0D\r\n");
+        UART_1_UartPutString(
+            "No response at 0x0D\r\n"
+        );
     }
 
     (void)I2C_1_I2CMasterSendStop(I2C_TIMEOUT_MS);
 
-    /* Verify that the responding device is a QMC5883L. */
     if (QMC5883L_ReadRegister(
             QMC5883L_CHIP_ID_REG,
             &chipId) != 0u)
@@ -294,9 +394,24 @@ int main(void)
         {
             dataReady = 0u;
 
-            UART_1_UartPutString(
-                "DRDY interrupt received\r\n"
-            );
+            if (QMC5883L_ReadData(&measurement) != 0u)
+            {
+                sprintf(
+                    output,
+                    "X: %d, Y: %d, Z: %d\r\n",
+                    (int)measurement.x,
+                    (int)measurement.y,
+                    (int)measurement.z
+                );
+
+                UART_1_UartPutString(output);
+            }
+            else
+            {
+                UART_1_UartPutString(
+                    "Failed to read sensor data\r\n"
+                );
+            }
         }
     }
 }
