@@ -78,7 +78,9 @@ volatile uint8 dataReady = 0u;
  * @retval 1u Write completed successfully.
  * @retval 0u I2C communication failed.
  */
-uint8 QMC5883L_WriteRegister(uint8 registerAddress, uint8 value)
+uint8 QMC5883L_WriteRegister(
+    uint8 registerAddress,
+    uint8 value)
 {
     uint32 status;
 
@@ -100,7 +102,10 @@ uint8 QMC5883L_WriteRegister(uint8 registerAddress, uint8 value)
 
     if (status != I2C_STATUS_OK)
     {
-        (void)I2C_1_I2CMasterSendStop(I2C_TIMEOUT_MS);
+        (void)I2C_1_I2CMasterSendStop(
+            I2C_TIMEOUT_MS
+        );
+
         return 0u;
     }
 
@@ -111,11 +116,16 @@ uint8 QMC5883L_WriteRegister(uint8 registerAddress, uint8 value)
 
     if (status != I2C_STATUS_OK)
     {
-        (void)I2C_1_I2CMasterSendStop(I2C_TIMEOUT_MS);
+        (void)I2C_1_I2CMasterSendStop(
+            I2C_TIMEOUT_MS
+        );
+
         return 0u;
     }
 
-    status = I2C_1_I2CMasterSendStop(I2C_TIMEOUT_MS);
+    status = I2C_1_I2CMasterSendStop(
+        I2C_TIMEOUT_MS
+    );
 
     return (status == I2C_STATUS_OK) ? 1u : 0u;
 }
@@ -127,7 +137,9 @@ uint8 QMC5883L_WriteRegister(uint8 registerAddress, uint8 value)
  * @retval 1u Read completed successfully.
  * @retval 0u I2C communication failed.
  */
-uint8 QMC5883L_ReadRegister(uint8 registerAddress, uint8 *value)
+uint8 QMC5883L_ReadRegister(
+    uint8 registerAddress,
+    uint8 *value)
 {
     uint32 status;
 
@@ -149,7 +161,10 @@ uint8 QMC5883L_ReadRegister(uint8 registerAddress, uint8 *value)
 
     if (status != I2C_STATUS_OK)
     {
-        (void)I2C_1_I2CMasterSendStop(I2C_TIMEOUT_MS);
+        (void)I2C_1_I2CMasterSendStop(
+            I2C_TIMEOUT_MS
+        );
+
         return 0u;
     }
 
@@ -161,7 +176,10 @@ uint8 QMC5883L_ReadRegister(uint8 registerAddress, uint8 *value)
 
     if (status != I2C_STATUS_OK)
     {
-        (void)I2C_1_I2CMasterSendStop(I2C_TIMEOUT_MS);
+        (void)I2C_1_I2CMasterSendStop(
+            I2C_TIMEOUT_MS
+        );
+
         return 0u;
     }
 
@@ -171,7 +189,9 @@ uint8 QMC5883L_ReadRegister(uint8 registerAddress, uint8 *value)
         I2C_TIMEOUT_MS
     );
 
-    (void)I2C_1_I2CMasterSendStop(I2C_TIMEOUT_MS);
+    (void)I2C_1_I2CMasterSendStop(
+        I2C_TIMEOUT_MS
+    );
 
     return (status == I2C_STATUS_OK) ? 1u : 0u;
 }
@@ -208,7 +228,10 @@ uint8 QMC5883L_ReadData(QMC5883L_Data *data)
 
     if (status != I2C_STATUS_OK)
     {
-        (void)I2C_1_I2CMasterSendStop(I2C_TIMEOUT_MS);
+        (void)I2C_1_I2CMasterSendStop(
+            I2C_TIMEOUT_MS
+        );
+
         return 0u;
     }
 
@@ -220,7 +243,10 @@ uint8 QMC5883L_ReadData(QMC5883L_Data *data)
 
     if (status != I2C_STATUS_OK)
     {
-        (void)I2C_1_I2CMasterSendStop(I2C_TIMEOUT_MS);
+        (void)I2C_1_I2CMasterSendStop(
+            I2C_TIMEOUT_MS
+        );
+
         return 0u;
     }
 
@@ -253,7 +279,9 @@ uint8 QMC5883L_ReadData(QMC5883L_Data *data)
         }
     }
 
-    status = I2C_1_I2CMasterSendStop(I2C_TIMEOUT_MS);
+    status = I2C_1_I2CMasterSendStop(
+        I2C_TIMEOUT_MS
+    );
 
     if (status != I2C_STATUS_OK)
     {
@@ -320,7 +348,8 @@ void IIR_FilterUpdate(
  *
  * @return Heading from 0 to 359 degrees.
  */
-uint16 QMC5883L_CalculateHeading(const IIR_Filter *filter)
+uint16 QMC5883L_CalculateHeading(
+    const IIR_Filter *filter)
 {
     double heading;
 
@@ -413,7 +442,7 @@ int main(void)
     CyGlobalIntEnable;
 
     UART_1_UartPutString(
-        "Compass reader started\r\n"
+        "[INFO] Compass reader started\r\n"
     );
 
     i2cStatus = I2C_1_I2CMasterSendStart(
@@ -425,7 +454,7 @@ int main(void)
     if (i2cStatus == I2C_STATUS_OK)
     {
         UART_1_UartPutString(
-            "Device found at 0x0D\r\n"
+            "[INFO] Device found at 0x0D\r\n"
         );
 
         (void)I2C_1_I2CMasterSendStop(
@@ -435,7 +464,7 @@ int main(void)
     else
     {
         UART_1_UartPutString(
-            "No response at 0x0D\r\n"
+            "[ERROR] No response at 0x0D\r\n"
         );
     }
 
@@ -446,33 +475,36 @@ int main(void)
         if (chipId == 0xFFu)
         {
             UART_1_UartPutString(
-                "QMC5883L chip ID confirmed: 0xFF\r\n"
+                "[INFO] QMC5883L chip ID confirmed: "
+                "0xFF\r\n"
             );
 
             if (QMC5883L_Initialize() != 0u)
             {
                 UART_1_UartPutString(
-                    "QMC5883L initialized\r\n"
+                    "[INFO] QMC5883L initialized\r\n"
                 );
             }
             else
             {
                 UART_1_UartPutString(
-                    "QMC5883L initialization failed\r\n"
+                    "[ERROR] QMC5883L initialization "
+                    "failed\r\n"
                 );
             }
         }
         else
         {
             UART_1_UartPutString(
-                "Unexpected chip ID\r\n"
+                "[ERROR] Unexpected chip ID\r\n"
             );
         }
     }
     else
     {
         UART_1_UartPutString(
-            "Failed to read chip ID register\r\n"
+            "[ERROR] Failed to read chip ID "
+            "register\r\n"
         );
     }
 
@@ -494,7 +526,7 @@ int main(void)
 
                 sprintf(
                     output,
-                    "RAW X:%d Y:%d Z:%d | "
+                    "[DATA] RAW X:%d Y:%d Z:%d | "
                     "IIR X:%ld Y:%ld Z:%ld | "
                     "Heading:%u deg\r\n",
                     (int)measurement.x,
@@ -511,7 +543,8 @@ int main(void)
             else
             {
                 UART_1_UartPutString(
-                    "Failed to read sensor data\r\n"
+                    "[ERROR] Failed to read sensor "
+                    "data\r\n"
                 );
             }
         }
