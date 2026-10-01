@@ -12,6 +12,7 @@
 
 #include "project.h"
 #include <stdio.h>
+#include <math.h>
 
 
 /* QMC5883L I2C settings */
@@ -46,6 +47,9 @@
 /* Higher values provide stronger smoothing but slower response. */
 #define IIR_FILTER_DIVISOR             (8)
 
+#define PI                             (3.14159265358979323846)
+#define RADIANS_TO_DEGREES             (180.0 / PI)
+
 
 typedef struct
 {
@@ -54,6 +58,7 @@ typedef struct
     int16 z;
 } QMC5883L_Data;
 
+
 typedef struct
 {
     int32 x;
@@ -61,6 +66,7 @@ typedef struct
     int32 z;
     uint8 initialized;
 } IIR_Filter;
+
 
 /* Set by the DRDY interrupt and processed in the main loop. */
 volatile uint8 dataReady = 0u;
@@ -218,7 +224,9 @@ uint8 QMC5883L_ReadData(QMC5883L_Data *data)
         return 0u;
     }
 
-    for (index = 0u; index < QMC5883L_DATA_BYTE_COUNT; index++)
+    for (index = 0u;
+         index < QMC5883L_DATA_BYTE_COUNT;
+         index++)
     {
         if (index == (QMC5883L_DATA_BYTE_COUNT - 1u))
         {
@@ -237,7 +245,10 @@ uint8 QMC5883L_ReadData(QMC5883L_Data *data)
 
         if (status != I2C_STATUS_OK)
         {
-            (void)I2C_1_I2CMasterSendStop(I2C_TIMEOUT_MS);
+            (void)I2C_1_I2CMasterSendStop(
+                I2C_TIMEOUT_MS
+            );
+
             return 0u;
         }
     }
@@ -267,6 +278,7 @@ uint8 QMC5883L_ReadData(QMC5883L_Data *data)
     return 1u;
 }
 
+
 /**
  * @brief Updates the IIR filter using a new sensor measurement.
  *
@@ -283,21 +295,50 @@ void IIR_FilterUpdate(
         filter->y = measurement->y;
         filter->z = measurement->z;
         filter->initialized = 1u;
-        
+
         return;
     }
-        filter->x +=
-            ((int32)measurement->x - filter->x) /
-            IIR_FILTER_DIVISOR;
 
-        filter->y +=
-            ((int32)measurement->y - filter->y) /
-            IIR_FILTER_DIVISOR;
+    filter->x +=
+        ((int32)measurement->x - filter->x) /
+        IIR_FILTER_DIVISOR;
 
-        filter->z +=
-            ((int32)measurement->z - filter->z) /
-            IIR_FILTER_DIVISOR;
+    filter->y +=
+        ((int32)measurement->y - filter->y) /
+        IIR_FILTER_DIVISOR;
+
+    filter->z +=
+        ((int32)measurement->z - filter->z) /
+        IIR_FILTER_DIVISOR;
 }
+
+
+/**
+ * @brief Calculates the compass heading from filtered X and Y values.
+ *
+ * @param[in] filter Current filtered magnetometer values.
+ *
+ * @return Heading from 0 to 359 degrees.
+ */
+uint16 QMC5883L_CalculateHeading(const IIR_Filter *filter)
+{
+    double heading;
+
+    heading = atan2(
+        (double)filter->y,
+        (double)filter->x
+    );
+
+    heading *= RADIANS_TO_DEGREES;
+
+    if (heading < 0.0)
+    {
+        heading += 360.0;
+    }
+
+    return (uint16)heading;
+}
+
 
 /**
  * @brief Configures the QMC5883L for continuous measurements.
@@ -360,7 +401,8 @@ int main(void)
     uint32 i2cStatus;
     QMC5883L_Data measurement;
     IIR_Filter filter = {0};
-    char output[140];
+    uint16 heading;
+    char output[160];
 
     UART_1_Start();
     I2C_1_Start();
@@ -370,7 +412,9 @@ int main(void)
 
     CyGlobalIntEnable;
 
-    UART_1_UartPutString("Compass reader started\r\n");
+    UART_1_UartPutString(
+        "Compass reader started\r\n"
+    );
 
     i2cStatus = I2C_1_I2CMasterSendStart(
         QMC5883L_ADDRESS,
@@ -383,6 +427,10 @@ int main(void)
         UART_1_UartPutString(
             "Device found at 0x0D\r\n"
         );
+
+        (void)I2C_1_I2CMasterSendStop(
+            I2C_TIMEOUT_MS
+        );
     }
     else
     {
@@ -390,8 +438,6 @@ int main(void)
             "No response at 0x0D\r\n"
         );
     }
-
-    (void)I2C_1_I2CMasterSendStop(I2C_TIMEOUT_MS);
 
     if (QMC5883L_ReadRegister(
             QMC5883L_CHIP_ID_REG,
@@ -438,17 +484,26 @@ int main(void)
 
             if (QMC5883L_ReadData(&measurement) != 0u)
             {
-                IIR_FilterUpdate(&filter, &measurement);
-                
+                IIR_FilterUpdate(
+                    &filter,
+                    &measurement
+                );
+
+                heading =
+                    QMC5883L_CalculateHeading(&filter);
+
                 sprintf(
                     output,
-                    "RAW X:%d Y:%d Z:%d | IIR X:%ld Y:%ld Z:%ld\r\n",
+                    "RAW X:%d Y:%d Z:%d | "
+                    "IIR X:%ld Y:%ld Z:%ld | "
+                    "Heading:%u deg\r\n",
                     (int)measurement.x,
                     (int)measurement.y,
                     (int)measurement.z,
                     (long)filter.x,
                     (long)filter.y,
-                    (long)filter.z                    
+                    (long)filter.z,
+                    (unsigned int)heading
                 );
 
                 UART_1_UartPutString(output);
