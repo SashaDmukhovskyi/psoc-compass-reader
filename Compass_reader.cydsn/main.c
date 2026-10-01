@@ -43,6 +43,9 @@
 #define I2C_STATUS_OK                  (0u)
 #define I2C_TIMEOUT_MS                 (100u)
 
+/* Higher values provide stronger smoothing but slower response. */
+#define IIR_FILTER_DIVISOR             (8)
+
 
 typedef struct
 {
@@ -51,6 +54,13 @@ typedef struct
     int16 z;
 } QMC5883L_Data;
 
+typedef struct
+{
+    int32 x;
+    int32 y;
+    int32 z;
+    uint8 initialized;
+} IIR_Filter;
 
 /* Set by the DRDY interrupt and processed in the main loop. */
 volatile uint8 dataReady = 0u;
@@ -257,6 +267,37 @@ uint8 QMC5883L_ReadData(QMC5883L_Data *data)
     return 1u;
 }
 
+/**
+ * @brief Updates the IIR filter using a new sensor measurement.
+ *
+ * @param[in,out] filter      Current state of the IIR filter.
+ * @param[in]     measurement New raw magnetometer measurement.
+ */
+void IIR_FilterUpdate(
+    IIR_Filter *filter,
+    const QMC5883L_Data *measurement)
+{
+    if (filter->initialized == 0u)
+    {
+        filter->x = measurement->x;
+        filter->y = measurement->y;
+        filter->z = measurement->z;
+        filter->initialized = 1u;
+        
+        return;
+    }
+        filter->x +=
+            ((int32)measurement->x - filter->x) /
+            IIR_FILTER_DIVISOR;
+
+        filter->y +=
+            ((int32)measurement->y - filter->y) /
+            IIR_FILTER_DIVISOR;
+
+        filter->z +=
+            ((int32)measurement->z - filter->z) /
+            IIR_FILTER_DIVISOR;
+}
 
 /**
  * @brief Configures the QMC5883L for continuous measurements.
@@ -318,7 +359,8 @@ int main(void)
     uint8 chipId;
     uint32 i2cStatus;
     QMC5883L_Data measurement;
-    char output[80];
+    IIR_Filter filter = {0};
+    char output[140];
 
     UART_1_Start();
     I2C_1_Start();
@@ -396,12 +438,17 @@ int main(void)
 
             if (QMC5883L_ReadData(&measurement) != 0u)
             {
+                IIR_FilterUpdate(&filter, &measurement);
+                
                 sprintf(
                     output,
-                    "X: %d, Y: %d, Z: %d\r\n",
+                    "RAW X:%d Y:%d Z:%d | IIR X:%ld Y:%ld Z:%ld\r\n",
                     (int)measurement.x,
                     (int)measurement.y,
-                    (int)measurement.z
+                    (int)measurement.z,
+                    (long)filter.x,
+                    (long)filter.y,
+                    (long)filter.z                    
                 );
 
                 UART_1_UartPutString(output);
