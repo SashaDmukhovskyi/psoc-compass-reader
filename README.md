@@ -38,9 +38,6 @@ installed on the tested board is actually a **QMC5883L**. It responds at the
 | `SDA` | `P4[1]` | I2C data |
 | `DRDY` | `P2[0]` | Data-ready interrupt |
 
-> Verify the labels printed on the module before applying power. Pin order may
-> differ between GY-271 board revisions.
-
 ## Peripheral configuration
 
 ### I2C
@@ -237,7 +234,3 @@ Generated source files and build output are excluded from version control.
 - Split the sensor and filter logic into separate `.c` and `.h` modules.
 - Throttle UART logs while continuing to sample the sensor at 50 Hz.
 - Replace `sprintf()` with bounded formatting where supported.
-
-## Repository
-
-[SashaDmukhovskyi/psoc-compass-reader](https://github.com/SashaDmukhovskyi/psoc-compass-reader)
