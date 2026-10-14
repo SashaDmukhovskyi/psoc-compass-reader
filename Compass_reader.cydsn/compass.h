@@ -29,6 +29,9 @@ void IIR_FilterUpdate(
     uint16 filterDivisor);
 
 uint16 QMC5883L_CalculateHeading(const IIR_Filter *filter);
+int32 Compass_CalculateHeadingFixed(const IIR_Filter *filter);
+double Compass_CalculateHeadingDouble(const IIR_Filter *filter);
+double Compass_CalculateHeadingDoubleRadians(const IIR_Filter *filter);
     
 #endif
 /* [] END OF FILE */

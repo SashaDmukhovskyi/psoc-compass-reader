@@ -13,6 +13,7 @@
 #include "project.h"
 #include "qmc5883l.h"
 #include "compass.h"
+#include "benchmark.h"
 #include <stdio.h>
 #include <math.h>
 
@@ -61,6 +62,123 @@ CY_ISR(DRDY_handler)
     dataReady = 1u;
 }
 
+
+
+
+/** @brief Checks both heading algorithms using predefined vectors. */
+static void RunHeadingTests(void)
+{
+    static const int16 cases[][2] = {
+        {1000, 0},
+        {1000, 1000},
+        {0, 1000},
+        {-1000, 1000},
+        {-1000, 0},
+        {-1000, -1000},
+        {0, -1000},
+        {1000, -1000},
+        {1000, 414},
+        {1000, 415},
+        {1000, -1}
+    };
+
+    IIR_Filter testFilter = {0};
+    uint8 index;
+    double doubleDegrees;
+    double fixedDegrees;
+    double error;
+    uint32 doubleCentiDeg;
+    uint32 fixedCentiDeg;
+    uint32 errorMilliDeg;
+    char text[160];
+
+    for (index = 0u; index < (sizeof(cases) / sizeof(cases[0])); index++)
+    {
+        testFilter.x = cases[index][0];
+        testFilter.y = cases[index][1];
+
+        doubleDegrees = Compass_CalculateHeadingDoubleRadians(&testFilter) * RADIANS_TO_DEGREES;
+        fixedDegrees = (double)Compass_CalculateHeadingFixed(&testFilter) * RADIANS_TO_DEGREES / 65536.0;
+
+        error = fabs(doubleDegrees - fixedDegrees);
+
+        if (error > 180.0)
+        {
+            error = 360.0 - error;
+        }
+
+        doubleCentiDeg = (uint32)(doubleDegrees * 100.0);
+        fixedCentiDeg = (uint32)(fixedDegrees * 100.0);
+        errorMilliDeg = (uint32)(error * 1000.0 + 0.5);
+
+        sprintf(text, "[TEST] X:%d Y:%d | Double:%lu.%02lu | Fixed:%lu.%02lu | Error:%lu.%03lu deg\r\n", (int)cases[index][0], (int)cases[index][1], (unsigned long)(doubleCentiDeg / 100u), (unsigned long)(doubleCentiDeg % 100u), (unsigned long)(fixedCentiDeg / 100u), (unsigned long)(fixedCentiDeg % 100u), (unsigned long)(errorMilliDeg / 1000u), (unsigned long)(errorMilliDeg % 1000u));
+        UART_1_UartPutString(text);
+    }
+
+    testFilter.x = 0;
+    testFilter.y = 0;
+
+    sprintf(text, "[TEST] Zero vector: Fixed=%ld; direction undefined\r\n", (long)Compass_CalculateHeadingFixed(&testFilter));
+    UART_1_UartPutString(text);
+}
+
+/** @brief Repeats timing measurements on an unchanged vector. */
+static void RunTimingTest(void)
+{
+    IIR_Filter input = {1000, 414, 0, 1u};
+    uint8 index;
+    uint8 interruptState;
+    uint32 start;
+    uint32 end;
+    uint32 doubleCycles;
+    uint32 fixedCycles;
+    double doubleResult;
+    int32 fixedResult;
+    volatile double doubleSink;
+    volatile int32 fixedSink;
+    char text[160];
+
+    for (index = 0u; index < 16u; index++)
+    {
+        interruptState = CyEnterCriticalSection();
+
+        start = Benchmark_ReadCounter();
+        doubleResult = Compass_CalculateHeadingDoubleRadians(&input);
+        end = Benchmark_ReadCounter();
+        doubleCycles = Benchmark_ElapsedCycles(start, end);
+
+        start = Benchmark_ReadCounter();
+        fixedResult = Compass_CalculateHeadingFixed(&input);
+        end = Benchmark_ReadCounter();
+        fixedCycles = Benchmark_ElapsedCycles(start, end);
+
+        CyExitCriticalSection(interruptState);
+
+        doubleSink = doubleResult;
+        fixedSink = fixedResult;
+
+        sprintf(text, "[BENCH] Run:%u X:%ld Y:%ld | Double:%lu | Fixed:%lu cycles\r\n", (unsigned int)index, (long)input.x, (long)input.y, (unsigned long)doubleCycles, (unsigned long)fixedCycles);
+        UART_1_UartPutString(text);
+    }
+
+    (void)doubleSink;
+    (void)fixedSink;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 /** @brief Initializes and runs the compass reader. **/
 int main(void)
 {
@@ -69,16 +187,33 @@ int main(void)
     uint32 i2cStatus;
     QMC5883L_Data measurement;
     IIR_Filter filter = {0};
-    uint16 heading;
+    int32 headingFixed;
+    uint32 headingFixedCentiDeg;
     char output[160];
+    double headingDouble;
+    double headingFixedDegrees;
+    double headingError;
+    uint32 headingDoubleCentiDeg;
+    uint32 headingErrorMilliDeg;
+    uint32 startCycles;
+    uint32 endCycles;
+    uint32 doubleCycles;
+    uint32 fixedCycles;
+    uint8 interruptState;
+    uint32 counterOverhead;
 
     UART_1_Start();
     I2C_1_Start();
+    Benchmark_Initialize();
 
     (void)DRDY_ClearInterrupt();
     isr_DRDY_StartEx(DRDY_handler);
 
     CyGlobalIntEnable;
+    
+    
+    RunHeadingTests(); //////
+    RunTimingTest();
 
     UART_1_UartPutString("[INFO] Compass reader started\r\n");
 
@@ -129,10 +264,47 @@ int main(void)
             {
                 IIR_FilterUpdate(&filter, &measurement, filterDivisor);
 
-                heading = QMC5883L_CalculateHeading(&filter);
+                interruptState = CyEnterCriticalSection();
+                
+                startCycles = Benchmark_ReadCounter();
+                endCycles = Benchmark_ReadCounter();
+                counterOverhead = Benchmark_ElapsedCycles(startCycles, endCycles);
 
-                sprintf(output, "[DATA] RAW X:%d Y:%d Z:%d | IIR X:%ld Y:%ld Z:%ld | Heading:%u deg\r\n", (int)measurement.x, (int)measurement.y, (int)measurement.z, (long)filter.x, (long)filter.y, (long)filter.z, (unsigned int)heading);
+                startCycles = Benchmark_ReadCounter();
+                headingDouble = Compass_CalculateHeadingDoubleRadians(&filter);
+                endCycles = Benchmark_ReadCounter();
+                doubleCycles = Benchmark_ElapsedCycles(startCycles, endCycles);
 
+                startCycles = Benchmark_ReadCounter();
+                headingFixed = Compass_CalculateHeadingFixed(&filter);
+                endCycles = Benchmark_ReadCounter();
+                fixedCycles = Benchmark_ElapsedCycles(startCycles, endCycles);
+
+                CyExitCriticalSection(interruptState);
+                
+                headingDouble *= RADIANS_TO_DEGREES;
+
+                headingFixedDegrees = (double)headingFixed * (180.0 / PI) / 65536.0;
+                headingFixedCentiDeg = (uint32)(headingFixedDegrees * 100.0);
+
+                headingError = fabs(headingDouble - headingFixedDegrees);
+
+                if (headingError > 180.0)
+                {
+                    headingError = 360.0 - headingError;
+                }
+
+                headingDoubleCentiDeg = (uint32)(headingDouble * 100.0);
+                headingErrorMilliDeg = (uint32)(headingError * 1000.0 + 0.5);
+
+                sprintf(output, "[DATA] Double:%lu.%02lu deg | Fixed:%lu.%02lu deg | Error:%lu.%03lu deg\r\n",
+                (unsigned long)(headingDoubleCentiDeg / 100u), (unsigned long)(headingDoubleCentiDeg % 100u),
+                (unsigned long)(headingFixedCentiDeg / 100u), (unsigned long)(headingFixedCentiDeg % 100u),
+                (unsigned long)(headingErrorMilliDeg / 1000u), (unsigned long)(headingErrorMilliDeg % 1000u));
+                UART_1_UartPutString(output);
+
+                sprintf(output, "[TIME] Double:%lu cycles | Fixed:%lu cycles | Overhead:%lu cycles\r\n",
+                (unsigned long)doubleCycles, (unsigned long)fixedCycles, (unsigned long)counterOverhead);
                 UART_1_UartPutString(output);
             }
             else
