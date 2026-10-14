@@ -6,15 +6,15 @@
  */
 /**
  * @file main.c
- * @brief Reads the magnetometer and compares double and fixed-point headings.
+ * @brief Reads the magnetometer and runs heading comparisons.
  */
 
 #include "project.h"
 #include "qmc5883l.h"
 #include "compass.h"
 #include "benchmark.h"
+#include "compass_tests.h"
 #include <stdio.h>
-#include <math.h>
 
 /* Change these settings, rebuild and program the board. */
 #define FILTER_DIVISOR       (8u)
@@ -23,10 +23,9 @@
 
 #define CHIP_ID_REGISTER     (0x0Du)
 #define EXPECTED_CHIP_ID     (0xFFu)
+#define CONTROL_1_REGISTER   (0x09u)
+#define EXPECTED_CONFIG      (0x0Du)
 
-#define PI                   (3.14159265358979323846)
-#define RADIANS_TO_DEGREES   (180.0 / PI)
-#define FIXED_SCALE          (65536.0)
 #define CPU_FREQUENCY_HZ     (CYDEV_BCLK__SYSCLK__HZ)
 #define OUTPUT_PERIOD_CYCLES ((CPU_FREQUENCY_HZ / 1000u) * OUTPUT_PERIOD_MS)
 
@@ -49,150 +48,21 @@ CY_ISR(DRDY_handler)
 }
 
 
-/** @brief Measures three algorithms and prints results outside the timed interval. */
-static void PrintComparison(const char *label, const IIR_Filter *filter)
-{
-    uint8 interruptState;
-    uint32 start;
-    uint32 end;
-    uint32 doubleCycles;
-    uint32 fixedCycles;
-    uint32 libraryCycles;
-    uint32 overhead;
-    int32 fixedRadians;
-    int32 libraryRadians;
-    double doubleRadians;
-    double doubleDegrees;
-    double fixedDegrees;
-    double libraryDegrees;
-    double fixedError;
-    double libraryError;
-    uint32 doubleCentiDeg;
-    uint32 fixedCentiDeg;
-    uint32 libraryCentiDeg;
-    uint32 fixedErrorMilliDeg;
-    uint32 libraryErrorMilliDeg;
-    char output[256];
-
-    interruptState = CyEnterCriticalSection();
-
-    start = Benchmark_ReadCounter();
-    end = Benchmark_ReadCounter();
-    overhead = Benchmark_ElapsedCycles(start, end);
-
-    start = Benchmark_ReadCounter();
-    doubleRadians = Compass_CalculateHeadingDoubleRadians(filter);
-    end = Benchmark_ReadCounter();
-    doubleCycles = Benchmark_ElapsedCycles(start, end);
-
-    start = Benchmark_ReadCounter();
-    fixedRadians = Compass_CalculateHeadingFixed(filter);
-    end = Benchmark_ReadCounter();
-    fixedCycles = Benchmark_ElapsedCycles(start, end);
-
-    start = Benchmark_ReadCounter();
-    libraryRadians = Compass_CalculateHeadingLibrary(filter);
-    end = Benchmark_ReadCounter();
-    libraryCycles = Benchmark_ElapsedCycles(start, end);
-
-    CyExitCriticalSection(interruptState);
-
-    doubleDegrees = doubleRadians * RADIANS_TO_DEGREES;
-    fixedDegrees = (double)fixedRadians * RADIANS_TO_DEGREES / FIXED_SCALE;
-    libraryDegrees = (double)libraryRadians * RADIANS_TO_DEGREES / FIXED_SCALE;
-
-    fixedError = fabs(doubleDegrees - fixedDegrees);
-    libraryError = fabs(doubleDegrees - libraryDegrees);
-
-    if (fixedError > 180.0)
-    {
-        fixedError = 360.0 - fixedError;
-    }
-
-    if (libraryError > 180.0)
-    {
-        libraryError = 360.0 - libraryError;
-    }
-
-    doubleCentiDeg = (uint32)(doubleDegrees * 100.0);
-    fixedCentiDeg = (uint32)(fixedDegrees * 100.0);
-    libraryCentiDeg = (uint32)(libraryDegrees * 100.0);
-    fixedErrorMilliDeg = (uint32)(fixedError * 1000.0 + 0.5);
-    libraryErrorMilliDeg = (uint32)(libraryError * 1000.0 + 0.5);
-
-    (void)snprintf(output, sizeof(output), "[%s] X:%ld Y:%ld Z:%ld | Double:%lu.%02lu deg | Series:%lu.%02lu deg | Library:%lu.%02lu deg\r\n", label, (long)filter->x, (long)filter->y, (long)filter->z, (unsigned long)(doubleCentiDeg / 100u), (unsigned long)(doubleCentiDeg % 100u), (unsigned long)(fixedCentiDeg / 100u), (unsigned long)(fixedCentiDeg % 100u), (unsigned long)(libraryCentiDeg / 100u), (unsigned long)(libraryCentiDeg % 100u));
-    UART_1_UartPutString(output);
-
-    (void)snprintf(output, sizeof(output), "[ERROR-DEG] Series:%lu.%03lu | Library:%lu.%03lu\r\n", (unsigned long)(fixedErrorMilliDeg / 1000u), (unsigned long)(fixedErrorMilliDeg % 1000u), (unsigned long)(libraryErrorMilliDeg / 1000u), (unsigned long)(libraryErrorMilliDeg % 1000u));
-    UART_1_UartPutString(output);
-
-    (void)snprintf(output, sizeof(output), "[TIME] Double:%lu | Series:%lu | Library:%lu | Overhead:%lu cycles\r\n", (unsigned long)doubleCycles, (unsigned long)fixedCycles, (unsigned long)libraryCycles, (unsigned long)overhead);
-    UART_1_UartPutString(output);
-}
-
-
-/** @brief Checks predefined directions and repeats one timing case. */
-static void RunStartupTests(void)
-{
-    static const int16 cases[][2] = {
-        {1000, 0},
-        {1000, 1000},
-        {0, 1000},
-        {-1000, 1000},
-        {-1000, 0},
-        {-1000, -1000},
-        {0, -1000},
-        {1000, -1000},
-        {1000, 414},
-        {1000, 415},
-        {1000, -1}
-    };
-
-    IIR_Filter input = {0};
-    uint32 index;
-    char output[100];
-
-    UART_1_UartPutString("[INFO] Heading tests\r\n");
-
-    for (index = 0u; index < (sizeof(cases) / sizeof(cases[0])); index++)
-    {
-        input.x = cases[index][0];
-        input.y = cases[index][1];
-        PrintComparison("TEST", &input);
-    }
-
-    input.x = 0;
-    input.y = 0;
-
-    (void)snprintf(output, sizeof(output), "[TEST] Zero vector: Fixed=%ld; direction undefined\r\n", (long)Compass_CalculateHeadingFixed(&input));
-    UART_1_UartPutString(output);
-
-    input.x = 1000;
-    input.y = 414;
-
-    UART_1_UartPutString("[INFO] Timing test: 16 repetitions, X=1000 Y=414\r\n");
-
-    for (index = 0u; index < 16u; index++)
-    {
-        PrintComparison("BENCH", &input);
-    }
-}
-
-
 /** @brief Initializes the sensor and processes data-ready events. */
 int main(void)
 {
     uint8 chipId;
+    uint8 configuration;
     uint8 interruptState;
     uint8 ready;
     uint32 previousCounter;
     uint32 currentCounter;
     uint32 elapsed;
     uint32 outputElapsed = 0u;
-    QMC5883L_Data measurement;
-    IIR_Filter filter = {0};
     uint32 readCount = 0u;
     uint32 rateElapsed = 0u;
+    QMC5883L_Data measurement;
+    IIR_Filter filter = {0};
     char rateOutput[100];
 
     UART_1_Start();
@@ -244,9 +114,10 @@ int main(void)
     }
 
     UART_1_UartPutString("[INFO] Sensor initialized\r\n");
-    if (QMC5883L_ReadRegister(0x09u, &chipId) != 0u)
+
+    if (QMC5883L_ReadRegister(CONTROL_1_REGISTER, &configuration) != 0u)
     {
-        if (chipId == 0x0Du)
+        if (configuration == EXPECTED_CONFIG)
         {
             UART_1_UartPutString("[INFO] Configuration confirmed: 200 Hz\r\n");
         }
@@ -258,19 +129,17 @@ int main(void)
     else
     {
         UART_1_UartPutString("[ERROR] Failed to verify sensor configuration\r\n");
-}
+    }
 
     previousCounter = Benchmark_ReadCounter();
 
     for (;;)
     {
-        /* Accumulate elapsed cycles; each poll must be within one SysTick period. */
+        /* Each counter poll must be within one SysTick period. */
         currentCounter = Benchmark_ReadCounter();
         elapsed = Benchmark_ElapsedCycles(previousCounter, currentCounter);
         previousCounter = currentCounter;
-        
-        
-        
+
         rateElapsed += elapsed;
 
         if (rateElapsed >= CPU_FREQUENCY_HZ)
@@ -281,10 +150,6 @@ int main(void)
             readCount = 0u;
             rateElapsed = 0u;
         }
-
-
-
-
 
         if (outputElapsed < OUTPUT_PERIOD_CYCLES)
         {
@@ -298,7 +163,7 @@ int main(void)
             }
         }
 
-        /* Read and clear the flag together to avoid losing an interrupt between them. */
+        /* Take and clear the flag atomically. Multiple events can still coalesce. */
         interruptState = CyEnterCriticalSection();
         ready = dataReady;
         dataReady = 0u;
@@ -314,10 +179,8 @@ int main(void)
             UART_1_UartPutString("[ERROR] Failed to read sensor data\r\n");
             continue;
         }
-        
-        readCount++;
-        IIR_FilterUpdate(&filter, &measurement, FILTER_DIVISOR);
 
+        readCount++;
         IIR_FilterUpdate(&filter, &measurement, FILTER_DIVISOR);
 
         if (outputElapsed >= OUTPUT_PERIOD_CYCLES)
