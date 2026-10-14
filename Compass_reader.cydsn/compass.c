@@ -9,28 +9,33 @@
  *
  * ========================================
 */
+/**
+ * @file compass.c
+ * @brief Integer IIR filtering and double/fixed-point heading calculations.
+ */
+
 #include "compass.h"
 #include <math.h>
 
-#define PI                 (3.14159265358979323846)
-#define RADIANS_TO_DEGREES (180.0 / PI)
+#define PI                (3.14159265358979323846)
 
-#define FIXED_ONE (65536L)
-
-#define FIXED_PI_OVER_4   (51472L)
-#define FIXED_ATAN_LIMIT  (27146L)
-
+#define FIXED_ONE         (65536L)
 #define FIXED_PI          (205887L)
 #define FIXED_PI_OVER_2   (102944L)
+#define FIXED_PI_OVER_4   (51472L)
 #define FIXED_TWO_PI      (411775L)
+#define FIXED_ATAN_LIMIT  (27146L)
+#define ATAN_SERIES_TERMS (12u)
 
-/** @brief Multiplies two fixed-point values with 16 fractional bits. */
+
+/** @brief Multiplies fixed-point values using a 64-bit intermediate. */
 static int32 Fixed_Multiply(int32 a, int32 b)
 {
     return (int32)(((int64)a * (int64)b) / FIXED_ONE);
 }
 
-/** @brief Approximates atan(t) in radians for |t| <= 0.4143, using fixed-point arithmetic. */
+
+/** @brief Evaluates the atan series for a reduced argument, |t| <= 0.4143. */
 static int32 Fixed_AtanSeries(int32 t)
 {
     int32 square = Fixed_Multiply(t, t);
@@ -38,7 +43,8 @@ static int32 Fixed_AtanSeries(int32 t)
     int32 result = t;
     uint8 index;
 
-    for (index = 1u; index < 12u; index++)
+    /* t - t^3/3 + t^5/5 - t^7/7 + ... */
+    for (index = 1u; index < ATAN_SERIES_TERMS; index++)
     {
         power = -Fixed_Multiply(power, square);
         result += power / (int32)(2u * index + 1u);
@@ -46,6 +52,7 @@ static int32 Fixed_AtanSeries(int32 t)
 
     return result;
 }
+
 
 /** @brief Calculates atan(t) for a fixed-point argument from 0 to 1. */
 static int32 Fixed_AtanUnit(int32 t)
@@ -57,12 +64,51 @@ static int32 Fixed_AtanUnit(int32 t)
         return Fixed_AtanSeries(t);
     }
 
+    /* atan(t) = pi/4 + atan((t - 1) / (t + 1)). */
     reduced = (int32)(((int64)(t - FIXED_ONE) * FIXED_ONE) / (t + FIXED_ONE));
 
     return FIXED_PI_OVER_4 + Fixed_AtanSeries(reduced);
 }
 
-/** @brief Calculates the XY angle in fixed-point radians; returns 0 for a zero vector. */
+
+/** @brief Updates all three filtered axes; a zero divisor leaves the state unchanged. */
+void IIR_FilterUpdate(IIR_Filter *filter, const QMC5883L_Data *measurement, uint16 filterDivisor)
+{
+    if (filterDivisor == 0u)
+    {
+        return;
+    }
+
+    if (filter->initialized == 0u)
+    {
+        filter->x = measurement->x;
+        filter->y = measurement->y;
+        filter->z = measurement->z;
+        filter->initialized = 1u;
+        return;
+    }
+
+    filter->x += ((int32)measurement->x - filter->x) / (int32)filterDivisor;
+    filter->y += ((int32)measurement->y - filter->y) / (int32)filterDivisor;
+    filter->z += ((int32)measurement->z - filter->z) / (int32)filterDivisor;
+}
+
+
+/** @brief Returns the double baseline angle in radians from 0 to 2*pi. */
+double Compass_CalculateHeadingDoubleRadians(const IIR_Filter *filter)
+{
+    double angle = atan2((double)filter->y, (double)filter->x);
+
+    if (angle < 0.0)
+    {
+        angle += 2.0 * PI;
+    }
+
+    return angle;
+}
+
+
+/** @brief Returns the angle in fixed-point radians; zero vector returns an arbitrary 0. */
 int32 Compass_CalculateHeadingFixed(const IIR_Filter *filter)
 {
     int64 x = filter->x;
@@ -77,6 +123,7 @@ int32 Compass_CalculateHeadingFixed(const IIR_Filter *filter)
         return 0;
     }
 
+    /* Divide the smaller magnitude by the larger to keep the ratio within [0, 1]. */
     if (absX >= absY)
     {
         ratio = (int32)((absY * FIXED_ONE) / absX);
@@ -101,77 +148,6 @@ int32 Compass_CalculateHeadingFixed(const IIR_Filter *filter)
     if (angle >= FIXED_TWO_PI)
     {
         angle -= FIXED_TWO_PI;
-    }
-
-    return angle;
-}
-
-
-
-/** @brief Updates the IIR filter using a new sensor measurement. **/
-void IIR_FilterUpdate(IIR_Filter *filter, const QMC5883L_Data *measurement, uint16 filterDivisor)
-{
-    if (filter->initialized == 0u)
-    {
-        filter->x = measurement->x;
-        filter->y = measurement->y;
-        filter->z = measurement->z;
-        filter->initialized = 1u;
-
-        return;
-    }
-
-    filter->x += ((int32)measurement->x - filter->x) / (int32)filterDivisor;
-
-    filter->y += ((int32)measurement->y - filter->y) / (int32)filterDivisor;
-
-    filter->z += ((int32)measurement->z - filter->z) / (int32)filterDivisor;
-}
-
-/** @brief Calculates the compass heading from filtered X and Y values. **/
-
- 
-uint16 QMC5883L_CalculateHeading(
-    const IIR_Filter *filter)
-{
-    double heading;
-
-    heading = atan2(
-        (double)filter->y,
-        (double)filter->x
-    );
-
-    heading *= RADIANS_TO_DEGREES;
-
-    if (heading < 0.0)
-    {
-        heading += 360.0;
-    }
-
-    return (uint16)heading;
-}
-
-/** @brief Returns the uncalibrated XY angle in double-precision degrees. */
-double Compass_CalculateHeadingDouble(const IIR_Filter *filter)
-{
-    double angle = atan2((double)filter->y, (double)filter->x) * RADIANS_TO_DEGREES;
-
-    if (angle < 0.0)
-    {
-        angle += 360.0;
-    }
-
-    return angle;
-}
-
-/** @brief Returns the XY angle in double-precision radians from 0 to 2*pi. */
-double Compass_CalculateHeadingDoubleRadians(const IIR_Filter *filter)
-{
-    double angle = atan2((double)filter->y, (double)filter->x);
-
-    if (angle < 0.0)
-    {
-        angle += 2.0 * PI;
     }
 
     return angle;

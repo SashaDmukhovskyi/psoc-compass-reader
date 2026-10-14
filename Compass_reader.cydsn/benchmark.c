@@ -9,12 +9,18 @@
  *
  * ========================================
 */
+/**
+ * @file benchmark.c
+ * @brief SysTick cycle counter for short execution-time measurements.
+ */
+
 #include "project.h"
 #include "benchmark.h"
 
 #define BENCHMARK_COUNTER_MASK (0x00FFFFFFu)
 
-/** @brief Starts a free-running SysTick counter clocked by SYSCLK. */
+
+/** @brief Starts SysTick on SYSCLK without periodic interrupts. */
 void Benchmark_Initialize(void)
 {
     CySysTickInit();
@@ -26,13 +32,15 @@ void Benchmark_Initialize(void)
     CySysTickDisableInterrupt();
 }
 
+
 /** @brief Returns the current down-counter value. */
 uint32 Benchmark_ReadCounter(void)
 {
     return CySysTickGetValue();
 }
 
-/** @brief Returns elapsed cycles for an interval shorter than one counter period. */
+
+/** @brief Returns elapsed cycles for an interval shorter than one full counter period. */
 uint32 Benchmark_ElapsedCycles(uint32 start, uint32 end)
 {
     return (start - end) & BENCHMARK_COUNTER_MASK;
