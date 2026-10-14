@@ -16,6 +16,7 @@
 
 void PrintComparison(const char *label, const IIR_Filter *filter);
 void RunStartupTests(void);
+void RunArithmeticTests(void);
 
 #endif
 /* [] END OF FILE */

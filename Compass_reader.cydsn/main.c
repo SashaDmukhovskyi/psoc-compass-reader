@@ -76,6 +76,7 @@ int main(void)
     if (RUN_STARTUP_TESTS != 0u)
     {
         RunStartupTests();
+        RunArithmeticTests();
     }
 
     if (QMC5883L_ReadRegister(CHIP_ID_REGISTER, &chipId) == 0u)

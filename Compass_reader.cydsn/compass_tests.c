@@ -153,4 +153,61 @@ void RunStartupTests(void)
         PrintComparison("BENCH", &input);
     }
 }
+
+/* Measures a batch, including loop and volatile memory access overhead. */
+#define MEASURE_ARITHMETIC(label, expression)                         \
+    do                                                               \
+    {                                                                \
+        interruptState = CyEnterCriticalSection();                   \
+        start = Benchmark_ReadCounter();                             \
+        for (index = 0u; index < repetitions; index++)                \
+        {                                                            \
+            expression;                                              \
+        }                                                            \
+        end = Benchmark_ReadCounter();                               \
+        CyExitCriticalSection(interruptState);                       \
+        cycles = Benchmark_ElapsedCycles(start, end);                \
+        (void)snprintf(output, sizeof(output),                        \
+            "[ARITH] %s: %lu cycles / %lu iterations\r\n",            \
+            label, (unsigned long)cycles,                            \
+            (unsigned long)repetitions);                             \
+        UART_1_UartPutString(output);                                 \
+    } while (0)
+
+
+/** @brief Compares batches of unsigned 32-bit and 64-bit arithmetic. */
+void RunArithmeticTests(void)
+{
+    const uint32 repetitions = 1000u;
+    uint8 interruptState;
+    uint32 start;
+    uint32 end;
+    uint32 cycles;
+    uint32 index;
+    char output[100];
+
+    volatile uint32_t a32 = 123456u;
+    volatile uint32_t b32 = 37u;
+    volatile uint32_t result32 = 0u;
+
+    volatile uint64_t a64 = 5000000000ULL;
+    volatile uint64_t b64 = 37ULL;
+    volatile uint64_t result64 = 0ULL;
+
+    UART_1_UartPutString("[INFO] Arithmetic tests: loop and memory overhead included\r\n");
+
+    MEASURE_ARITHMETIC("ADD32", result32 = a32 + b32);
+    MEASURE_ARITHMETIC("ADD64", result64 = a64 + b64);
+
+    MEASURE_ARITHMETIC("SUB32", result32 = a32 - b32);
+    MEASURE_ARITHMETIC("SUB64", result64 = a64 - b64);
+
+    MEASURE_ARITHMETIC("MUL32", result32 = a32 * b32);
+    MEASURE_ARITHMETIC("MUL64", result64 = a64 * b64);
+
+    (void)result32;
+    (void)result64;
+}
+
+#undef MEASURE_ARITHMETIC
 /* [] END OF FILE */
