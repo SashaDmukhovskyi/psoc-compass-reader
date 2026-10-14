@@ -4,143 +4,191 @@
  *
  * ========================================
  */
-
 /**
  * @file main.c
- * @brief QMC5883L compass reader using I2C, DRDY interrupt and UART.
+ * @brief Reads the magnetometer and runs heading comparisons.
  */
 
 #include "project.h"
 #include "qmc5883l.h"
 #include "compass.h"
+#include "benchmark.h"
+#include "compass_tests.h"
 #include <stdio.h>
-#include <math.h>
 
-/* QMC5883L I2C settings */
-#define QMC5883L_ADDRESS               (0x0Du)
-#define QMC5883L_CHIP_ID_REG           (0x0Du)
+/* Change these settings, rebuild and program the board. */
+#define FILTER_DIVISOR       (8u)
+#define OUTPUT_PERIOD_MS     (1000u)
+#define RUN_STARTUP_TESTS     (1u)
 
-/* QMC5883L data registers */
-#define QMC5883L_DATA_START_REG        (0x00u)
-#define QMC5883L_DATA_BYTE_COUNT       (6u)
+#define CHIP_ID_REGISTER     (0x0Du)
+#define EXPECTED_CHIP_ID     (0xFFu)
+#define CONTROL_1_REGISTER   (0x09u)
+#define EXPECTED_CONFIG      (0x0Du)
 
-/* QMC5883L configuration registers */
-#define QMC5883L_CONTROL_1_REG         (0x09u)
-#define QMC5883L_CONTROL_2_REG         (0x0Au)
-#define QMC5883L_SET_RESET_REG         (0x0Bu)
+#define CPU_FREQUENCY_HZ     (CYDEV_BCLK__SYSCLK__HZ)
+#define OUTPUT_PERIOD_CYCLES ((CPU_FREQUENCY_HZ / 1000u) * OUTPUT_PERIOD_MS)
 
-/* QMC5883L configuration values */
-#define QMC5883L_SOFT_RESET            (0x80u)
-#define QMC5883L_INTERRUPT_ENABLE      (0x00u)
-#define QMC5883L_SET_RESET_PERIOD      (0x01u)
+#if FILTER_DIVISOR < 1u || FILTER_DIVISOR > 65535u
+#error FILTER_DIVISOR must be between 1 and 65535.
+#endif
 
-/* OSR 512, +/-2 G, 50 Hz, continuous measurement */
-#define QMC5883L_CONFIG_VALUE          (0x05u)
+#if OUTPUT_PERIOD_MS < 1u || OUTPUT_PERIOD_MS > 1000u
+#error OUTPUT_PERIOD_MS must be between 1 and 1000.
+#endif
 
-/* I2C settings */
-#define I2C_WRITE_MODE                 (0u)
-#define I2C_READ_MODE                  (1u)
-#define I2C_ACK                        (0u)
-#define I2C_NACK                       (1u)
-#define I2C_STATUS_OK                  (0u)
-#define I2C_TIMEOUT_MS                 (100u)
+static volatile uint8 dataReady = 0u;
 
-/* Higher values provide stronger smoothing but slower response. */
-#define IIR_FILTER_DIVISOR             (8)
 
-#define PI                             (3.14159265358979323846)
-#define RADIANS_TO_DEGREES             (180.0 / PI)
-
-/* Set by the DRDY interrupt and processed in the main loop. */
-volatile uint8 dataReady = 0u;
-
-/** @brief Handles the QMC5883L data-ready interrupt. **/
+/** @brief Signals that a new sensor measurement is available. */
 CY_ISR(DRDY_handler)
 {
     (void)DRDY_ClearInterrupt();
     dataReady = 1u;
 }
 
-/** @brief Initializes and runs the compass reader. **/
+
+/** @brief Initializes the sensor and processes data-ready events. */
 int main(void)
 {
-    uint16 filterDivisor = 8u;
     uint8 chipId;
-    uint32 i2cStatus;
+    uint8 configuration;
+    uint8 interruptState;
+    uint8 ready;
+    uint32 previousCounter;
+    uint32 currentCounter;
+    uint32 elapsed;
+    uint32 outputElapsed = 0u;
+    uint32 readCount = 0u;
+    uint32 rateElapsed = 0u;
     QMC5883L_Data measurement;
     IIR_Filter filter = {0};
-    uint16 heading;
-    char output[160];
+    char rateOutput[100];
 
     UART_1_Start();
     I2C_1_Start();
-
-    (void)DRDY_ClearInterrupt();
-    isr_DRDY_StartEx(DRDY_handler);
+    Benchmark_Initialize();
 
     CyGlobalIntEnable;
 
     UART_1_UartPutString("[INFO] Compass reader started\r\n");
 
-    i2cStatus = I2C_1_I2CMasterSendStart(QMC5883L_ADDRESS, I2C_WRITE_MODE, I2C_TIMEOUT_MS);
-
-    if (i2cStatus == I2C_STATUS_OK)
+    if (RUN_STARTUP_TESTS != 0u)
     {
-        UART_1_UartPutString("[INFO] Device found at 0x0D\r\n");
-        (void)I2C_1_I2CMasterSendStop(I2C_TIMEOUT_MS);
-    }
-    else
-    {
-        UART_1_UartPutString("[ERROR] No response at 0x0D\r\n");
+        RunStartupTests();
+        RunArithmeticTests();
     }
 
-    if (QMC5883L_ReadRegister(QMC5883L_CHIP_ID_REG, &chipId) != 0u)
+    if (QMC5883L_ReadRegister(CHIP_ID_REGISTER, &chipId) == 0u)
     {
-        if (chipId == 0xFFu)
+        UART_1_UartPutString("[ERROR] Failed to read chip ID\r\n");
+
+        for (;;)
         {
-            UART_1_UartPutString("[INFO] QMC5883L chip ID confirmed: 0xFF\r\n");
+            CyDelay(100u);
+        }
+    }
 
-            if (QMC5883L_Initialize() != 0u)
-            {
-                UART_1_UartPutString("[INFO] QMC5883L initialized\r\n");
-            }
-            else
-            {
-                UART_1_UartPutString("[ERROR] QMC5883L initialization failed\r\n");
-            }
+    if (chipId != EXPECTED_CHIP_ID)
+    {
+        UART_1_UartPutString("[ERROR] Unexpected chip ID\r\n");
+
+        for (;;)
+        {
+            CyDelay(100u);
+        }
+    }
+
+    UART_1_UartPutString("[INFO] QMC5883L-compatible chip ID: 0xFF\r\n");
+
+    (void)DRDY_ClearInterrupt();
+    isr_DRDY_StartEx(DRDY_handler);
+
+    if (QMC5883L_Initialize() == 0u)
+    {
+        UART_1_UartPutString("[ERROR] Sensor initialization failed\r\n");
+
+        for (;;)
+        {
+            CyDelay(100u);
+        }
+    }
+
+    UART_1_UartPutString("[INFO] Sensor initialized\r\n");
+
+    if (QMC5883L_ReadRegister(CONTROL_1_REGISTER, &configuration) != 0u)
+    {
+        if (configuration == EXPECTED_CONFIG)
+        {
+            UART_1_UartPutString("[INFO] Configuration confirmed: 200 Hz\r\n");
         }
         else
         {
-            UART_1_UartPutString("[ERROR] Unexpected chip ID\r\n");
+            UART_1_UartPutString("[ERROR] Unexpected sensor configuration\r\n");
         }
     }
     else
     {
-        UART_1_UartPutString("[ERROR] Failed to read chip ID register\r\n");
+        UART_1_UartPutString("[ERROR] Failed to verify sensor configuration\r\n");
     }
+
+    previousCounter = Benchmark_ReadCounter();
 
     for (;;)
     {
-        if (dataReady != 0u)
+        /* Each counter poll must be within one SysTick period. */
+        currentCounter = Benchmark_ReadCounter();
+        elapsed = Benchmark_ElapsedCycles(previousCounter, currentCounter);
+        previousCounter = currentCounter;
+
+        rateElapsed += elapsed;
+
+        if (rateElapsed >= CPU_FREQUENCY_HZ)
         {
-            dataReady = 0u;
+            (void)snprintf(rateOutput, sizeof(rateOutput), "[RATE] Reads:%lu | Window:%lu ms\r\n", (unsigned long)readCount, (unsigned long)(rateElapsed / (CPU_FREQUENCY_HZ / 1000u)));
+            UART_1_UartPutString(rateOutput);
 
-            if (QMC5883L_ReadData(&measurement) != 0u)
+            readCount = 0u;
+            rateElapsed = 0u;
+        }
+
+        if (outputElapsed < OUTPUT_PERIOD_CYCLES)
+        {
+            if (elapsed >= (OUTPUT_PERIOD_CYCLES - outputElapsed))
             {
-                IIR_FilterUpdate(&filter, &measurement, filterDivisor);
-
-                heading = QMC5883L_CalculateHeading(&filter);
-
-                sprintf(output, "[DATA] RAW X:%d Y:%d Z:%d | IIR X:%ld Y:%ld Z:%ld | Heading:%u deg\r\n", (int)measurement.x, (int)measurement.y, (int)measurement.z, (long)filter.x, (long)filter.y, (long)filter.z, (unsigned int)heading);
-
-                UART_1_UartPutString(output);
+                outputElapsed = OUTPUT_PERIOD_CYCLES;
             }
             else
             {
-                UART_1_UartPutString("[ERROR] Failed to read sensor data\r\n");
+                outputElapsed += elapsed;
             }
+        }
+
+        /* Take and clear the flag atomically. Multiple events can still coalesce. */
+        interruptState = CyEnterCriticalSection();
+        ready = dataReady;
+        dataReady = 0u;
+        CyExitCriticalSection(interruptState);
+
+        if (ready == 0u)
+        {
+            continue;
+        }
+
+        if (QMC5883L_ReadData(&measurement) == 0u)
+        {
+            UART_1_UartPutString("[ERROR] Failed to read sensor data\r\n");
+            continue;
+        }
+
+        readCount++;
+        IIR_FilterUpdate(&filter, &measurement, FILTER_DIVISOR);
+
+        if (outputElapsed >= OUTPUT_PERIOD_CYCLES)
+        {
+            outputElapsed = 0u;
+            PrintComparison("DATA", &filter);
         }
     }
 }
-
 /* [] END OF FILE */
