@@ -15,6 +15,7 @@
  */
 
 #include "compass.h"
+#include "fix16.h"
 #include <math.h>
 
 #define PI                (3.14159265358979323846)
@@ -151,5 +152,25 @@ int32 Compass_CalculateHeadingFixed(const IIR_Filter *filter)
     }
 
     return angle;
+}
+
+/** @brief Returns the libfixmath angle in Q16.16 radians; zero vector returns 0. */
+int32 Compass_CalculateHeadingLibrary(const IIR_Filter *filter)
+{
+    fix16_t angle;
+
+    if ((filter->x == 0) && (filter->y == 0))
+    {
+        return 0;
+    }
+
+    angle = fix16_atan2((fix16_t)filter->y, (fix16_t)filter->x);
+
+    if (angle < 0)
+    {
+        angle += 2 * fix16_pi;
+    }
+
+    return (int32)angle;
 }
 /* [] END OF FILE */

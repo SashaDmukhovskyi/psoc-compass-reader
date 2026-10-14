@@ -19,7 +19,7 @@
 /* Change these settings, rebuild and program the board. */
 #define FILTER_DIVISOR       (8u)
 #define OUTPUT_PERIOD_MS     (1000u)
-#define RUN_STARTUP_TESTS     (0u)
+#define RUN_STARTUP_TESTS     (1u)
 
 #define CHIP_ID_REGISTER     (0x0Du)
 #define EXPECTED_CHIP_ID     (0xFFu)
@@ -49,7 +49,7 @@ CY_ISR(DRDY_handler)
 }
 
 
-/** @brief Measures both algorithms and prints their results outside the timed interval. */
+/** @brief Measures three algorithms and prints results outside the timed interval. */
 static void PrintComparison(const char *label, const IIR_Filter *filter)
 {
     uint8 interruptState;
@@ -57,15 +57,21 @@ static void PrintComparison(const char *label, const IIR_Filter *filter)
     uint32 end;
     uint32 doubleCycles;
     uint32 fixedCycles;
+    uint32 libraryCycles;
     uint32 overhead;
     int32 fixedRadians;
+    int32 libraryRadians;
     double doubleRadians;
     double doubleDegrees;
     double fixedDegrees;
-    double error;
+    double libraryDegrees;
+    double fixedError;
+    double libraryError;
     uint32 doubleCentiDeg;
     uint32 fixedCentiDeg;
-    uint32 errorMilliDeg;
+    uint32 libraryCentiDeg;
+    uint32 fixedErrorMilliDeg;
+    uint32 libraryErrorMilliDeg;
     char output[256];
 
     interruptState = CyEnterCriticalSection();
@@ -84,26 +90,43 @@ static void PrintComparison(const char *label, const IIR_Filter *filter)
     end = Benchmark_ReadCounter();
     fixedCycles = Benchmark_ElapsedCycles(start, end);
 
+    start = Benchmark_ReadCounter();
+    libraryRadians = Compass_CalculateHeadingLibrary(filter);
+    end = Benchmark_ReadCounter();
+    libraryCycles = Benchmark_ElapsedCycles(start, end);
+
     CyExitCriticalSection(interruptState);
 
     doubleDegrees = doubleRadians * RADIANS_TO_DEGREES;
     fixedDegrees = (double)fixedRadians * RADIANS_TO_DEGREES / FIXED_SCALE;
+    libraryDegrees = (double)libraryRadians * RADIANS_TO_DEGREES / FIXED_SCALE;
 
-    error = fabs(doubleDegrees - fixedDegrees);
+    fixedError = fabs(doubleDegrees - fixedDegrees);
+    libraryError = fabs(doubleDegrees - libraryDegrees);
 
-    if (error > 180.0)
+    if (fixedError > 180.0)
     {
-        error = 360.0 - error;
+        fixedError = 360.0 - fixedError;
+    }
+
+    if (libraryError > 180.0)
+    {
+        libraryError = 360.0 - libraryError;
     }
 
     doubleCentiDeg = (uint32)(doubleDegrees * 100.0);
     fixedCentiDeg = (uint32)(fixedDegrees * 100.0);
-    errorMilliDeg = (uint32)(error * 1000.0 + 0.5);
+    libraryCentiDeg = (uint32)(libraryDegrees * 100.0);
+    fixedErrorMilliDeg = (uint32)(fixedError * 1000.0 + 0.5);
+    libraryErrorMilliDeg = (uint32)(libraryError * 1000.0 + 0.5);
 
-    (void)snprintf(output, sizeof(output), "[%s] X:%ld Y:%ld Z:%ld | Double:%lu.%02lu deg | Fixed:%lu.%02lu deg | Error:%lu.%03lu deg\r\n", label, (long)filter->x, (long)filter->y, (long)filter->z, (unsigned long)(doubleCentiDeg / 100u), (unsigned long)(doubleCentiDeg % 100u), (unsigned long)(fixedCentiDeg / 100u), (unsigned long)(fixedCentiDeg % 100u), (unsigned long)(errorMilliDeg / 1000u), (unsigned long)(errorMilliDeg % 1000u));
+    (void)snprintf(output, sizeof(output), "[%s] X:%ld Y:%ld Z:%ld | Double:%lu.%02lu deg | Series:%lu.%02lu deg | Library:%lu.%02lu deg\r\n", label, (long)filter->x, (long)filter->y, (long)filter->z, (unsigned long)(doubleCentiDeg / 100u), (unsigned long)(doubleCentiDeg % 100u), (unsigned long)(fixedCentiDeg / 100u), (unsigned long)(fixedCentiDeg % 100u), (unsigned long)(libraryCentiDeg / 100u), (unsigned long)(libraryCentiDeg % 100u));
     UART_1_UartPutString(output);
 
-    (void)snprintf(output, sizeof(output), "[TIME] Double:%lu cycles | Fixed:%lu cycles | Overhead:%lu cycles\r\n", (unsigned long)doubleCycles, (unsigned long)fixedCycles, (unsigned long)overhead);
+    (void)snprintf(output, sizeof(output), "[ERROR-DEG] Series:%lu.%03lu | Library:%lu.%03lu\r\n", (unsigned long)(fixedErrorMilliDeg / 1000u), (unsigned long)(fixedErrorMilliDeg % 1000u), (unsigned long)(libraryErrorMilliDeg / 1000u), (unsigned long)(libraryErrorMilliDeg % 1000u));
+    UART_1_UartPutString(output);
+
+    (void)snprintf(output, sizeof(output), "[TIME] Double:%lu | Series:%lu | Library:%lu | Overhead:%lu cycles\r\n", (unsigned long)doubleCycles, (unsigned long)fixedCycles, (unsigned long)libraryCycles, (unsigned long)overhead);
     UART_1_UartPutString(output);
 }
 

@@ -25,6 +25,7 @@ typedef struct
 void IIR_FilterUpdate(IIR_Filter *filter, const QMC5883L_Data *measurement, uint16 filterDivisor);
 double Compass_CalculateHeadingDoubleRadians(const IIR_Filter *filter);
 int32 Compass_CalculateHeadingFixed(const IIR_Filter *filter);
+int32 Compass_CalculateHeadingLibrary(const IIR_Filter *filter);
 
 #endif
 /* [] END OF FILE */
