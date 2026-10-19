@@ -51,6 +51,26 @@ CY_ISR(DRDY_handler)
     dataReady = 1u;
 }
 
+/* Center XY measurements and equalize their axis ranges. */
+static void ApplyCalibration(QMC5883L_Data *data)
+{
+    int32 x = (int32)data->x - 314L;
+    int32 y = (int32)data->y - 1275L;
+
+    /* Scale both axes to a common half-range of 1704. */
+    x = (x * 1704L) / 1611L;
+    y = (y * 1704L) / 1797L;
+
+    /* Clamp before converting back to signed 16-bit values. */
+    if (x > 32767L) x = 32767L;
+    if (x < -32768L) x = -32768L;
+
+    if (y > 32767L) y = 32767L;
+    if (y < -32768L) y = -32768L;
+
+    data->x = (int16)x;
+    data->y = (int16)y;
+}
 
 int main(void)
 {
@@ -147,7 +167,7 @@ int main(void)
     }
 
     previousCounter = Benchmark_ReadCounter();
-
+    
     for (;;)
     {
         /* Poll within one full SysTick period to track elapsed cycles. */
@@ -206,6 +226,7 @@ int main(void)
         }
 
         readCount++;
+        ApplyCalibration(&measurement);
         IIR_FilterUpdate(&filter, &measurement, FILTER_DIVISOR);
 
         /* Output frequency is independent of the sensor configuration. */
