@@ -9,11 +9,17 @@
  *
  * ========================================
 */
+/**
+ * @file compass.h
+ * @brief Filter state and heading calculation interface.
+ */
+
 #ifndef COMPASS_H
 #define COMPASS_H
 
 #include "qmc5883l.h"
 
+/* Filtered sensor coordinates, stored as ordinary signed integers. */
 typedef struct
 {
     int32 x;
@@ -22,10 +28,19 @@ typedef struct
     uint8 initialized;
 } IIR_Filter;
 
-void IIR_FilterUpdate(IIR_Filter *filter, const QMC5883L_Data *measurement, uint16 filterDivisor);
-double Compass_CalculateHeadingDoubleRadians(const IIR_Filter *filter);
-int32 Compass_CalculateHeadingFixed(const IIR_Filter *filter);
-int32 Compass_CalculateHeadingLibrary(const IIR_Filter *filter);
+/* A zero divisor leaves the filter unchanged. */
+void IIR_FilterUpdate(
+    IIR_Filter *filter,
+    const QMC5883L_Data *measurement,
+    uint16 filterDivisor);
 
-#endif
+/* Reference calculation using double atan2(); returns radians. */
+double Compass_CalculateHeadingDoubleRadians(
+    const IIR_Filter *filter);
+
+/* Integer series calculation; returns radians scaled by 65536. */
+int32 Compass_CalculateHeadingFixed(
+    const IIR_Filter *filter);
+
+#endif /* COMPASS_H */
 /* [] END OF FILE */
